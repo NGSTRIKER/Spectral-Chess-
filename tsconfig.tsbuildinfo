@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/main.tsx","./src/vite-env.d.ts","./src/components/Board.tsx","./src/components/Pieces.tsx","./src/components/PlayerBar.tsx","./src/components/Sidebar.tsx","./src/engine/client.ts","./src/engine/spectralWorker.ts","./src/types/chess.ts","./src/utils/chessHelpers.ts","./src/utils/sounds.ts"],"version":"5.7.3"}
