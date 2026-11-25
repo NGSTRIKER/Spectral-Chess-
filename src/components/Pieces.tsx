@@ -12,7 +12,7 @@ const BLACK_FILL = '#2b2926';
 const BLACK_STROKE = '#141312';
 const BLACK_DETAIL = '#dcd9d2';
 
-export const PieceSvg: React.FC<PieceProps> = ({ piece, className = 'piece-svg' }) => {
+export const PieceSvg: React.FC<PieceProps> = React.memo(({ piece, className = 'piece-svg' }) => {
   const isWhite = piece === piece.toUpperCase();
   const fill = isWhite ? WHITE_FILL : BLACK_FILL;
   const stroke = isWhite ? WHITE_STROKE : BLACK_STROKE;
@@ -108,4 +108,4 @@ export const PieceSvg: React.FC<PieceProps> = ({ piece, className = 'piece-svg' 
     default:
       return null;
   }
-};
+});

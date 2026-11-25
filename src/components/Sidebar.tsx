@@ -49,7 +49,7 @@ interface SidebarProps {
   engineBusy: boolean;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({
+export const Sidebar: React.FC<SidebarProps> = React.memo(({
   activeTab,
   onTabChange,
   state,
@@ -488,4 +488,4 @@ export const Sidebar: React.FC<SidebarProps> = ({
       )}
     </aside>
   );
-};
+});

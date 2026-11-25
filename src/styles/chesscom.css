@@ -466,7 +466,6 @@ body {
   height: 86%;
   z-index: 3;
   pointer-events: none;
-  filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.24));
 }
 
 .legal-dot {
@@ -499,17 +498,18 @@ body {
 
 .drag-ghost {
   position: fixed;
+  top: 0;
+  left: 0;
   width: calc(var(--board-size) / 7.2);
   height: calc(var(--board-size) / 7.2);
-  transform: translate(-50%, -55%);
   pointer-events: none;
+  will-change: transform;
   z-index: 999;
 }
 
 .drag-ghost-svg {
   width: 100%;
   height: 100%;
-  filter: drop-shadow(0 8px 10px rgba(0, 0, 0, 0.45));
 }
 
 /* Promotion Picker */

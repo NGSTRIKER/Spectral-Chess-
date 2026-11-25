@@ -16,10 +16,10 @@ export const TIME_CONTROLS: TimeControlPreset[] = [
 ];
 
 export const BOT_PRESETS: BotPreset[] = [
-  { id: 'casual', name: 'Spectral Casual', rating: '~2100', depth: 6, movetimeMs: 120, tagline: 'Fast blitz replies' },
-  { id: 'club', name: 'Spectral Club', rating: '~2400', depth: 9, movetimeMs: 350, tagline: 'Balanced positional play' },
-  { id: 'master', name: 'Spectral Master', rating: '~2600', depth: 12, movetimeMs: 850, tagline: 'Strong public test strength' },
-  { id: 'gm', name: 'Spectral Max', rating: '~2700', depth: 15, movetimeMs: 1800, tagline: 'Full-depth tournament search' },
+  { id: 'casual', name: 'Spectral Casual', rating: '~2100', depth: 6, movetimeMs: 100, tagline: 'Instant replies' },
+  { id: 'club', name: 'Spectral Club', rating: '~2450', depth: 9, movetimeMs: 300, tagline: 'Fast balanced play' },
+  { id: 'master', name: 'Spectral Master', rating: '~2600', depth: 12, movetimeMs: 750, tagline: 'Strong public test strength' },
+  { id: 'gm', name: 'Spectral Max', rating: '~2700', depth: 15, movetimeMs: 1600, tagline: 'Deep tournament search' },
 ];
 
 const START_COUNTS: Record<'Q' | 'R' | 'B' | 'N' | 'P', number> = {

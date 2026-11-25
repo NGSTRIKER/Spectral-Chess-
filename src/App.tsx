@@ -67,7 +67,7 @@ export function App() {
   const [playerColor, setPlayerColor] = useState<'w' | 'b'>('w');
   const [playBothSides, setPlayBothSides] = useState(false);
   const [flipped, setFlipped] = useState(false);
-  const [selectedBot, setSelectedBot] = useState<BotPreset>(BOT_PRESETS[2]); // Master ~2600 default
+  const [selectedBot, setSelectedBot] = useState<BotPreset>(BOT_PRESETS[1]); // Snappy Club ~2450 default
   const [selectedTime, setSelectedTime] = useState<TimeControlPreset>(TIME_CONTROLS[2]); // 5 min Blitz
 
   const [themeId, setThemeId] = useState<BoardThemeId>('green');
@@ -83,9 +83,10 @@ export function App() {
   const [gameResultStr, setGameResultStr] = useState<string | null>(null);
   const [modalDismissed, setModalDismissed] = useState(false);
 
-  const [whiteClockMs, setWhiteClockMs] = useState<number>(TIME_CONTROLS[2].baseMs);
-  const [blackClockMs, setBlackClockMs] = useState<number>(TIME_CONTROLS[2].baseMs);
-  const clockActiveRef = useRef(false);
+  // Leaf-isolated clocks (zero App/Board re-renders on clock ticks!)
+  const whiteClockRef = useRef<number>(TIME_CONTROLS[2].baseMs);
+  const blackClockRef = useRef<number>(TIME_CONTROLS[2].baseMs);
+  const [clockSyncEpoch, setClockSyncEpoch] = useState(0);
   const stateRef = useRef<EngineState | null>(null);
   stateRef.current = state;
 
@@ -99,95 +100,59 @@ export function App() {
       .catch((e) => setLoadErr(e instanceof Error ? e.message : String(e)));
   }, []);
 
-  // Derive game over result banner automatically
   useEffect(() => {
     if (!state) return;
     if (state.status === 'checkmate') {
       const winner = state.side_to_move === 'w' ? 'Black' : 'White';
       setGameResultStr(`${winner} Won by Checkmate`);
-      clockActiveRef.current = false;
     } else if (state.status === 'stalemate') {
       setGameResultStr('Draw by Stalemate');
-      clockActiveRef.current = false;
     } else if (state.status === 'draw_repetition') {
       setGameResultStr('Draw by Repetition');
-      clockActiveRef.current = false;
     } else if (state.status === 'draw_50') {
       setGameResultStr('Draw by 50-Move Rule');
-      clockActiveRef.current = false;
     } else if (state.status === 'draw_insufficient') {
       setGameResultStr('Draw by Insufficient Material');
-      clockActiveRef.current = false;
     }
   }, [state]);
 
-  // Live chess clock interval
-  useEffect(() => {
-    if (selectedTime.baseMs === 0 || playBothSides) return;
-    let lastTick = performance.now();
-    const id = window.setInterval(() => {
-      const now = performance.now();
-      const dt = now - lastTick;
-      lastTick = now;
-      const cur = stateRef.current;
-      if (!cur || cur.status !== 'playing' || cur.history.length === 0 || !clockActiveRef.current) {
-        return;
-      }
-      if (cur.side_to_move === 'w') {
-        setWhiteClockMs((prev) => {
-          const nxt = Math.max(0, prev - dt);
-          if (nxt === 0) {
-            clockActiveRef.current = false;
-            setGameResultStr('Black Won on Time');
-            chessAudio.playGameEnd();
-          }
-          return nxt;
-        });
-      } else {
-        setBlackClockMs((prev) => {
-          const nxt = Math.max(0, prev - dt);
-          if (nxt === 0) {
-            clockActiveRef.current = false;
-            setGameResultStr('White Won on Time');
-            chessAudio.playGameEnd();
-          }
-          return nxt;
-        });
-      }
-    }, 100);
-    return () => window.clearInterval(id);
-  }, [selectedTime.baseMs, playBothSides]);
+  const handleWhiteTimeout = useCallback(() => {
+    setGameResultStr('Black Won on Time');
+    chessAudio.playGameEnd();
+  }, []);
 
-  const runEngineTurn = useCallback(
-    async (bot: BotPreset, tc: TimeControlPreset) => {
-      const cur = stateRef.current;
-      if (!cur || cur.status !== 'playing') return;
-      setEngineBusy(true);
-      setHintMoveUci(null);
-      try {
-        // Respect remaining engine clock when low
-        const remMs = cur.side_to_move === 'w' ? whiteClockMs : blackClockMs;
-        const budget =
-          tc.baseMs > 0
-            ? Math.max(40, Math.min(bot.movetimeMs, Math.floor(remMs / 16) + Math.floor(tc.incMs * 0.7)))
-            : bot.movetimeMs;
-        const prevCount = cur.squares.filter(Boolean).length;
-        const next = await spectralEngine.engineMove(bot.depth, budget);
-        const nextCount = next.squares.filter(Boolean).length;
-        if (tc.baseMs > 0 && tc.incMs > 0 && next.status === 'playing') {
-          if (cur.side_to_move === 'w') setWhiteClockMs((v) => v + tc.incMs);
-          else setBlackClockMs((v) => v + tc.incMs);
-        }
-        setState(next);
-        setViewPly(null);
-        const lastUci = next.history[next.history.length - 1]?.uci || '';
-        playSoundForMove(next, lastUci, nextCount < prevCount);
-      } finally {
-        setEngineBusy(false);
+  const handleBlackTimeout = useCallback(() => {
+    setGameResultStr('White Won on Time');
+    chessAudio.playGameEnd();
+  }, []);
+
+  const runEngineTurn = useCallback(async (bot: BotPreset, tc: TimeControlPreset) => {
+    const cur = stateRef.current;
+    if (!cur || cur.status !== 'playing') return;
+    setEngineBusy(true);
+    setHintMoveUci(null);
+    try {
+      const remMs = cur.side_to_move === 'w' ? whiteClockRef.current : blackClockRef.current;
+      const budget =
+        tc.baseMs > 0
+          ? Math.max(40, Math.min(bot.movetimeMs, Math.floor(remMs / 16) + Math.floor(tc.incMs * 0.7)))
+          : bot.movetimeMs;
+      const prevCount = cur.squares.filter(Boolean).length;
+      const next = await spectralEngine.engineMove(bot.depth, budget);
+      const nextCount = next.squares.filter(Boolean).length;
+      if (tc.baseMs > 0 && tc.incMs > 0 && next.status === 'playing') {
+        if (cur.side_to_move === 'w') whiteClockRef.current += tc.incMs;
+        else blackClockRef.current += tc.incMs;
+        setClockSyncEpoch((v) => v + 1);
       }
-    },
-    [whiteClockMs, blackClockMs],
-  );
+      setState(next);
+      setViewPly(null);
+      const lastUci = next.history[next.history.length - 1]?.uci || '';
+      playSoundForMove(next, lastUci, nextCount < prevCount);
+    } finally {
+      setEngineBusy(false);
+    }
+  }, []);
 
   const handleUserMove = useCallback(
     async (uci: string) => {
@@ -197,14 +162,12 @@ export function App() {
       const prev = stateRef.current;
       const mvMeta = prev.legal_moves.find((m) => m.uci === uci);
       const next = await spectralEngine.makeMove(uci);
-      if (next.history.length === prev.history.length) return; // illegal safeguard
+      if (next.history.length === prev.history.length) return;
 
-      if (selectedTime.baseMs > 0 && !playBothSides) {
-        clockActiveRef.current = true;
-        if (selectedTime.incMs > 0 && next.status === 'playing') {
-          if (prev.side_to_move === 'w') setWhiteClockMs((v) => v + selectedTime.incMs);
-          else setBlackClockMs((v) => v + selectedTime.incMs);
-        }
+      if (selectedTime.baseMs > 0 && !playBothSides && selectedTime.incMs > 0 && next.status === 'playing') {
+        if (prev.side_to_move === 'w') whiteClockRef.current += selectedTime.incMs;
+        else blackClockRef.current += selectedTime.incMs;
+        setClockSyncEpoch((v) => v + 1);
       }
 
       setState(next);
@@ -213,15 +176,22 @@ export function App() {
       if (!playBothSides && next.status === 'playing' && next.side_to_move !== playerColor) {
         setTimeout(() => {
           void runEngineTurn(selectedBot, selectedTime);
-        }, 45);
+        }, 0);
       }
     },
     [gameResultStr, playBothSides, playerColor, selectedBot, selectedTime, runEngineTurn],
   );
 
-  // Execute queued premove immediately after engine finishes moving
   useEffect(() => {
-    if (!engineBusy && premove && state && state.status === 'playing' && !playBothSides && state.side_to_move === playerColor && !gameResultStr) {
+    if (
+      !engineBusy &&
+      premove &&
+      state &&
+      state.status === 'playing' &&
+      !playBothSides &&
+      state.side_to_move === playerColor &&
+      !gameResultStr
+    ) {
       const match = state.legal_moves.find(
         (m) => m.from === premove.from && m.to === premove.to && (!m.promo || m.promo === (premove.promo || 'q')),
       );
@@ -232,78 +202,100 @@ export function App() {
     }
   }, [engineBusy, premove, state, playBothSides, playerColor, gameResultStr, handleUserMove]);
 
-  const handleStartNewGame = async (choice: 'w' | 'b' | 'random', bothSides = false) => {
-    const resolved: 'w' | 'b' = choice === 'random' ? (Math.random() < 0.5 ? 'w' : 'b') : choice;
-    setEngineBusy(false);
+  const handleStartNewGame = useCallback(
+    async (choice: 'w' | 'b' | 'random', bothSides = false) => {
+      const resolved: 'w' | 'b' = choice === 'random' ? (Math.random() < 0.5 ? 'w' : 'b') : choice;
+      setEngineBusy(false);
+      setPremove(null);
+      setHintMoveUci(null);
+      setViewPly(null);
+      setGameResultStr(null);
+      setModalDismissed(false);
+      setPlayBothSides(bothSides);
+      setPlayerColor(resolved);
+      setFlipped(resolved === 'b');
+      whiteClockRef.current = selectedTime.baseMs;
+      blackClockRef.current = selectedTime.baseMs;
+      setClockSyncEpoch((v) => v + 1);
+
+      const fresh = await spectralEngine.newGame('');
+      setState(fresh);
+      setBaseSquares(fresh.squares);
+
+      if (!bothSides && resolved === 'b') {
+        setTimeout(() => {
+          void runEngineTurn(selectedBot, selectedTime);
+        }, 0);
+      }
+    },
+    [selectedBot, selectedTime, runEngineTurn],
+  );
+
+  const handleLoadFen = useCallback(
+    async (fen: string) => {
+      if (!fen) return;
+      setEngineBusy(false);
+      setPremove(null);
+      setHintMoveUci(null);
+      setViewPly(null);
+      setGameResultStr(null);
+      setModalDismissed(false);
+      whiteClockRef.current = selectedTime.baseMs;
+      blackClockRef.current = selectedTime.baseMs;
+      setClockSyncEpoch((v) => v + 1);
+      const loaded = await spectralEngine.newGame(fen);
+      setState(loaded);
+      setBaseSquares(loaded.squares);
+    },
+    [selectedTime.baseMs],
+  );
+
+  const handleUndo = useCallback(async () => {
+    if (!stateRef.current || engineBusy || stateRef.current.history.length === 0) return;
     setPremove(null);
     setHintMoveUci(null);
     setViewPly(null);
     setGameResultStr(null);
-    setModalDismissed(false);
-    setPlayBothSides(bothSides);
-    setPlayerColor(resolved);
-    setFlipped(resolved === 'b');
-    clockActiveRef.current = false;
-    setWhiteClockMs(selectedTime.baseMs);
-    setBlackClockMs(selectedTime.baseMs);
-
-    const fresh = await spectralEngine.newGame('');
-    setState(fresh);
-    setBaseSquares(fresh.squares);
-
-    if (!bothSides && resolved === 'b') {
-      clockActiveRef.current = selectedTime.baseMs > 0;
-      setTimeout(() => {
-        void runEngineTurn(selectedBot, selectedTime);
-      }, 60);
-    }
-  };
-
-  const handleLoadFen = async (fen: string) => {
-    if (!fen) return;
-    setEngineBusy(false);
-    setPremove(null);
-    setHintMoveUci(null);
-    setViewPly(null);
-    setGameResultStr(null);
-    setModalDismissed(false);
-    clockActiveRef.current = false;
-    setWhiteClockMs(selectedTime.baseMs);
-    setBlackClockMs(selectedTime.baseMs);
-    const loaded = await spectralEngine.newGame(fen);
-    setState(loaded);
-    setBaseSquares(loaded.squares);
-  };
-
-  const handleUndo = async () => {
-    if (!state || engineBusy || state.history.length === 0) return;
-    setPremove(null);
-    setHintMoveUci(null);
-    setViewPly(null);
-    setGameResultStr(null);
-    const plies = !playBothSides && state.side_to_move === playerColor && state.history.length >= 2 ? 2 : 1;
+    const cur = stateRef.current;
+    const plies = !playBothSides && cur.side_to_move === playerColor && cur.history.length >= 2 ? 2 : 1;
     const prev = await spectralEngine.undo(plies);
     setState(prev);
-  };
+  }, [engineBusy, playBothSides, playerColor]);
 
-  const handleHint = async () => {
-    if (!state || engineBusy || state.status !== 'playing') return;
+  const handleHint = useCallback(async () => {
+    if (!stateRef.current || engineBusy || stateRef.current.status !== 'playing') return;
     setEngineBusy(true);
     try {
-      const analyzed = await spectralEngine.analyze(11, 700);
+      const analyzed = await spectralEngine.analyze(11, 600);
       setState(analyzed);
       if (analyzed.pv.length > 0) setHintMoveUci(analyzed.pv[0]);
     } finally {
       setEngineBusy(false);
     }
-  };
+  }, [engineBusy]);
 
-  // Keyboard shortcuts (Left/Right replay, F flip)
+  const handleResign = useCallback(() => {
+    if (!stateRef.current || stateRef.current.status !== 'playing' || gameResultStr) return;
+    setGameResultStr(playerColor === 'w' ? 'Black Won by Resignation' : 'White Won by Resignation');
+    chessAudio.playGameEnd();
+  }, [gameResultStr, playerColor]);
+
+  const handleFlip = useCallback(() => setFlipped((f) => !f), []);
+
+  const handleSelectTime = useCallback((tc: TimeControlPreset) => {
+    setSelectedTime(tc);
+    if (!stateRef.current || stateRef.current.history.length === 0) {
+      whiteClockRef.current = tc.baseMs;
+      blackClockRef.current = tc.baseMs;
+      setClockSyncEpoch((v) => v + 1);
+    }
+  }, []);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (!state) return;
-      const total = state.history.length;
+      if (!stateRef.current) return;
+      const total = stateRef.current.history.length;
       const cur = viewPly === null ? total : viewPly;
       if (e.key === 'ArrowLeft') {
         e.preventDefault();
@@ -318,9 +310,8 @@ export function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [state, viewPly]);
+  }, [viewPly]);
 
-  // Compute displayed board (live or historical replay)
   const displayed = useMemo(() => {
     if (!state) return null;
     if (viewPly === null || viewPly >= state.history.length) {
@@ -343,7 +334,15 @@ export function App() {
     return { squares: sqs, lastFrom: lf, lastTo: lt, isLive: false };
   }, [state, viewPly, baseSquares]);
 
-  const theme = BOARD_THEMES.find((t) => t.id === themeId) || BOARD_THEMES[0];
+  const captured = useMemo(
+    () => (displayed ? computeCaptured(displayed.squares) : null),
+    [displayed],
+  );
+
+  const theme = useMemo(
+    () => BOARD_THEMES.find((t) => t.id === themeId) || BOARD_THEMES[0],
+    [themeId],
+  );
 
   if (loadErr) {
     return (
@@ -356,7 +355,7 @@ export function App() {
     );
   }
 
-  if (!state || !displayed) {
+  if (!state || !displayed || !captured) {
     return (
       <div className="loading-screen">
         <div className="loading-card">
@@ -368,19 +367,21 @@ export function App() {
     );
   }
 
-  const captured = computeCaptured(displayed.squares);
   const topColor: 'w' | 'b' = flipped ? 'w' : 'b';
   const bottomColor: 'w' | 'b' = flipped ? 'b' : 'w';
 
   const topIsBot = !playBothSides && topColor !== playerColor;
   const bottomIsBot = !playBothSides && bottomColor !== playerColor;
 
+  const clocksStarted = state.history.length > 0 && state.status === 'playing' && !gameResultStr && !playBothSides && selectedTime.baseMs > 0;
+  const topClockRunning = clocksStarted && state.side_to_move === topColor;
+  const bottomClockRunning = clocksStarted && state.side_to_move === bottomColor;
+
   const evalWhitePct = evalWinPercentWhite(state.search_score_cp, state.search_mate);
   const evalLabel = formatEvalDisplay(state.search_score_cp, state.search_mate);
 
   return (
     <div className="app-shell">
-      {/* Left Chess.com-style Slim Navigation Rail */}
       <nav className="nav-rail">
         <div className="brand-block">
           <div className="brand-emblem">
@@ -447,15 +448,11 @@ export function App() {
         </button>
       </nav>
 
-      {/* Main Arena Stage */}
       <main className="arena-main">
         <div className="board-stage">
           {showEvalBar && (
             <div className={`eval-bar ${flipped ? 'flipped' : ''}`} title={`Spectral Eval: ${evalLabel}`}>
-              <div
-                className="eval-fill-white"
-                style={{ height: `${evalWhitePct.toFixed(1)}%` }}
-              />
+              <div className="eval-fill-white" style={{ height: `${evalWhitePct.toFixed(1)}%` }} />
               <span className={`eval-score-label ${evalWhitePct >= 50 ? 'white-side' : 'black-side'}`}>
                 {evalLabel}
               </span>
@@ -468,10 +465,14 @@ export function App() {
               rating={topIsBot ? selectedBot.rating : undefined}
               isBot={topIsBot}
               isActiveTurn={state.status === 'playing' && !gameResultStr && state.side_to_move === topColor}
+              clockRunning={topClockRunning}
               isThinking={engineBusy && topIsBot}
               capturedPieces={topColor === 'w' ? captured.whiteCapturedBlack : captured.blackCapturedWhite}
               materialAdv={topColor === 'w' ? captured.whiteAdvantage : -captured.whiteAdvantage}
-              clockMs={topColor === 'w' ? whiteClockMs : blackClockMs}
+              baseMs={selectedTime.baseMs}
+              syncEpoch={clockSyncEpoch}
+              clockRef={topColor === 'w' ? whiteClockRef : blackClockRef}
+              onTimeout={topColor === 'w' ? handleWhiteTimeout : handleBlackTimeout}
               unlimitedTime={selectedTime.baseMs === 0 || playBothSides}
             />
 
@@ -498,15 +499,11 @@ export function App() {
                 hintMoveUci={hintMoveUci}
                 premove={premove}
                 onSetPremove={setPremove}
-                onMakeMove={(uci) => void handleUserMove(uci)}
+                onMakeMove={handleUserMove}
               />
 
               {!displayed.isLive && (
-                <button
-                  type="button"
-                  className="live-banner-btn"
-                  onClick={() => setViewPly(null)}
-                >
+                <button type="button" className="live-banner-btn" onClick={() => setViewPly(null)}>
                   Viewing move {viewPly} — Click to return to live position
                 </button>
               )}
@@ -544,11 +541,7 @@ export function App() {
                       >
                         Swap Sides
                       </button>
-                      <button
-                        type="button"
-                        className="btn-sec"
-                        onClick={() => setModalDismissed(true)}
-                      >
+                      <button type="button" className="btn-sec" onClick={() => setModalDismissed(true)}>
                         Review Board
                       </button>
                     </div>
@@ -562,10 +555,14 @@ export function App() {
               rating={bottomIsBot ? selectedBot.rating : undefined}
               isBot={bottomIsBot}
               isActiveTurn={state.status === 'playing' && !gameResultStr && state.side_to_move === bottomColor}
+              clockRunning={bottomClockRunning}
               isThinking={engineBusy && bottomIsBot}
               capturedPieces={bottomColor === 'w' ? captured.whiteCapturedBlack : captured.blackCapturedWhite}
               materialAdv={bottomColor === 'w' ? captured.whiteAdvantage : -captured.whiteAdvantage}
-              clockMs={bottomColor === 'w' ? whiteClockMs : blackClockMs}
+              baseMs={selectedTime.baseMs}
+              syncEpoch={clockSyncEpoch}
+              clockRef={bottomColor === 'w' ? whiteClockRef : blackClockRef}
+              onTimeout={bottomColor === 'w' ? handleWhiteTimeout : handleBlackTimeout}
               unlimitedTime={selectedTime.baseMs === 0 || playBothSides}
             />
           </div>
@@ -580,24 +577,13 @@ export function App() {
           selectedBot={selectedBot}
           selectedTime={selectedTime}
           onSelectBot={setSelectedBot}
-          onSelectTime={(tc) => {
-            setSelectedTime(tc);
-            if (state.history.length === 0) {
-              setWhiteClockMs(tc.baseMs);
-              setBlackClockMs(tc.baseMs);
-            }
-          }}
-          onStartNewGame={(c, b) => void handleStartNewGame(c, b)}
-          onResign={() => {
-            if (state.status !== 'playing' || gameResultStr) return;
-            clockActiveRef.current = false;
-            setGameResultStr(playerColor === 'w' ? 'Black Won by Resignation' : 'White Won by Resignation');
-            chessAudio.playGameEnd();
-          }}
-          onUndo={() => void handleUndo()}
-          onFlip={() => setFlipped((f) => !f)}
-          onHint={() => void handleHint()}
-          onLoadFen={(f) => void handleLoadFen(f)}
+          onSelectTime={handleSelectTime}
+          onStartNewGame={handleStartNewGame}
+          onResign={handleResign}
+          onUndo={handleUndo}
+          onFlip={handleFlip}
+          onHint={handleHint}
+          onLoadFen={handleLoadFen}
           overlay={overlay}
           onOverlayChange={setOverlay}
           viewPly={viewPly}
@@ -607,7 +593,6 @@ export function App() {
         />
       </main>
 
-      {/* Theme Picker Modal */}
       {settingsOpen && (
         <div className="gameover-modal-wrap" onClick={() => setSettingsOpen(false)}>
           <div className="settings-modal" onClick={(e) => e.stopPropagation()}>
