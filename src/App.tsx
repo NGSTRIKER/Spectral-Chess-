@@ -13,6 +13,7 @@ import {
   VolumeX,
   X,
 } from 'lucide-react';
+import { Analytics } from '@vercel/analytics/react';
 import { Board } from './components/Board';
 import { PlayerBar } from './components/PlayerBar';
 import { Sidebar, SidebarTab } from './components/Sidebar';
@@ -626,6 +627,7 @@ export function App() {
           </div>
         </div>
       )}
+      <Analytics />
     </div>
   );
 }
